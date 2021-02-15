@@ -11,7 +11,10 @@ jobs:
   include:
     - stage: code formatting
       install:
-        - sudo apt -y install astyle
+        - sudo apt -y install astyle shellcheck golang-go
+        - export GOPATH="$HOME/go"
+        - export PATH="$PATH:$GOPATH/bin"
+        - go get -u github.com/mvdan/sh/cmd/shfmt
       script:
         - astyle --options=none --lineend=linux --style=1tbs --indent=force-tab=8 --break-blocks --indent-switches --pad-oper --pad-header --unpad-paren --suffix=none includes/* src/*
         - |
@@ -21,6 +24,7 @@ jobs:
             git diff
             exit -1
           fi
+        - shfmt -i 2 -d utils/*
     - stage: tests
       install:
         - sudo apt -y install apache2-dev libcairo2-dev libcurl4-gnutls-dev libiniparser-dev libmapnik-dev
