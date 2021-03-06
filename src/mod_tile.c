@@ -1008,7 +1008,7 @@ static int tile_storage_hook(request_rec *r)
 		return OK;
 	}
 
-	if (strcmp(r->handler, "tile_serve")) {
+	if (strcmp(r->handler, "tile_serve") && strcmp(r->handler, "tile_meta")) {
 		return DECLINED;
 	}
 
@@ -1322,7 +1322,7 @@ static int tile_handler_mod_stats(request_rec *r)
 
 static int tile_handler_serve(request_rec *r)
 {
-	const int tile_max = MAX_SIZE;
+	int tile_max = MAX_SIZE;
 	char err_msg[PATH_MAX];
 	char id[PATH_MAX];
 	char *buf;
@@ -1334,13 +1334,30 @@ static int tile_handler_serve(request_rec *r)
 	tile_config_rec *tile_configs;
 	struct tile_request_data * rdata;
 	struct protocol * cmd;
+    int tile_serve, tile_meta;
 
 	ap_conf_vector_t *sconf = r->server->module_config;
 	tile_server_conf *scfg = ap_get_module_config(sconf, &tile_module);
 
-	if (strcmp(r->handler, "tile_serve")) {
-		return DECLINED;
-	}
+    tile_serve = !strcmp(r->handler, "tile_serve");
+    tile_meta = !strcmp(r->handler, "tile_meta");
+
+    if(!tile_serve && !tile_meta)
+        return DECLINED;
+
+    if(tile_meta)
+		tile_max *= METATILE*METATILE;	// Maximum number of tiles in a meta tile
+
+		rdata = (struct tile_request_data *)ap_get_module_config(r->request_config, &tile_module);
+		cmd = rdata->cmd;
+		if (cmd == NULL){
+			sleep(CLIENT_PENALTY);
+        if (!incRespCounter(HTTP_NOT_FOUND, r, cmd, rdata->layerNumber)) {
+            ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r,
+                    "Failed to increase response stats counter");
+        }
+        return HTTP_NOT_FOUND;
+    }
 
 	rdata = (struct tile_request_data *)ap_get_module_config(r->request_config, &tile_module);
 	cmd = rdata->cmd;

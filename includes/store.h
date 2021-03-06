@@ -42,6 +42,7 @@ struct stat_info {
 struct storage_backend {
 	int (*tile_read)(struct storage_backend * store, const char *xmlconfig, const char *options, int x, int y, int z, char *buf, size_t sz, int * compressed, char * err_msg);
 	struct stat_info(*tile_stat)(struct storage_backend * store, const char *xmlconfig, const char *options, int x, int y, int z);
+	int (*metatile_read) (struct storage_backend * store, const char *xmlconfig, const char *options, int x, int y, int z, char *buf, size_t sz, char * err_msg);
 	int (*metatile_write)(struct storage_backend * store, const char *xmlconfig, const char *options, int x, int y, int z, const char *buf, int sz);
 	int (*metatile_delete)(struct storage_backend * store, const char *xmlconfig, int x, int y, int z);
 	int (*metatile_expire)(struct storage_backend * store, const char *xmlconfig, int x, int y, int z);

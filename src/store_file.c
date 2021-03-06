@@ -206,6 +206,53 @@ static char * file_tile_storage_id(struct storage_backend * store, const char *x
 	return string;
 }
 
+static int file_metatile_read(struct storage_backend * store, const char *xmlconfig, const char *options, int x, int y, int z, char *buf, size_t sz, char * log_msg) {
+
+    char path[PATH_MAX];
+    struct stat st_stat;
+    int fd;
+    unsigned int pos;
+    size_t tile_size;
+
+    xyzo_to_meta(path, sizeof(path), store->storage_ctx, xmlconfig, options, x, y, z);
+
+    if (stat(path, &st_stat)) {
+        snprintf(log_msg,PATH_MAX - 1, "Could not stat metatile %s. Reason: %s\n", path, strerror(errno));
+    	return -9;
+    }
+
+    fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        snprintf(log_msg,PATH_MAX - 1, "Could not open metatile %s. Reason: %s\n", path, strerror(errno));
+        return -1;
+    }
+
+    tile_size   = st_stat.st_size;
+
+    if (tile_size > sz) {
+        snprintf(log_msg, PATH_MAX - 1, "Truncating tile %zd to fit buffer of %zd\n", tile_size, sz);
+        tile_size = sz;
+        close(fd);
+        return -6;
+    }
+
+    pos = 0;
+    while (pos < tile_size) {
+        size_t len = tile_size - pos;
+        int got = read(fd, buf + pos, len);
+        if (got < 0) {
+            snprintf(log_msg, PATH_MAX - 1, "Failed to read data from file %s. Reason: %s\n", path, strerror(errno));
+            close(fd);
+            return -8;
+        } else if (got > 0) {
+            pos += got;
+        } else {
+            break;
+        }
+    }
+    close(fd);
+    return pos;
+}
 
 static int file_metatile_write(struct storage_backend * store, const char *xmlconfig, const char *options, int x, int y, int z, const char *buf, int sz)
 {
@@ -316,6 +363,7 @@ struct storage_backend * init_storage_file(const char * tile_dir)
 
 	store->tile_read = &file_tile_read;
 	store->tile_stat = &file_tile_stat;
+    store->metatile_read = &file_metatile_read;
 	store->metatile_write = &file_metatile_write;
 	store->metatile_delete = &file_metatile_delete;
 	store->metatile_expire = &file_metatile_expire;
