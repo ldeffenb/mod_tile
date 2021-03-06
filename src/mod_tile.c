@@ -1401,7 +1401,11 @@ static int tile_handler_serve(request_rec *r)
 
 	err_msg[0] = 0;
 
-	len = rdata->store->tile_read(rdata->store, cmd->xmlname, cmd->options, cmd->x, cmd->y, cmd->z, buf, tile_max, &compressed, err_msg);
+	if(tile_serve)
+	    len = rdata->store->tile_read(rdata->store, cmd->xmlname, cmd->options, cmd->x, cmd->y, cmd->z, buf, tile_max, &compressed, err_msg);
+	else if (tile_meta)
+	    len = rdata->store->metatile_read(rdata->store, cmd->xmlname, cmd->options, cmd->x, cmd->y, cmd->z, buf, tile_max, err_msg);
+
 	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
 		      "Read tile of length %i from %s: %s", len, rdata->store->tile_storage_id(rdata->store, cmd->xmlname, cmd->options, cmd->x, cmd->y, cmd->z, id), err_msg);
 
@@ -1431,7 +1435,11 @@ static int tile_handler_serve(request_rec *r)
 		apr_table_setn(r->headers_out, "ETag",
 			       apr_psprintf(r->pool, "\"%s\"", md5));
 #endif
-		ap_set_content_type(r, tile_configs[rdata->layerNumber].mimeType);
+	        if(tile_serve)
+		    ap_set_content_type(r, tile_configs[rdata->layerNumber].mimeType);
+		else if(tile_meta)
+		    ap_set_content_type(r, "application/octet-stream");
+
 		ap_set_content_length(r, len);
 		add_expiry(r, cmd);
 
@@ -1592,6 +1600,8 @@ static int tile_translate(request_rec *r)
 					r->handler = "tile_status";
 				} else if (!strcmp(option, "dirty")) {
 					r->handler = "tile_dirty";
+				} else if (!strcmp(option, "meta")) {
+					r->handler = "tile_meta";
 				} else {
 					return DECLINED;
 				}
