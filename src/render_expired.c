@@ -68,6 +68,8 @@ unsigned int **tile_requested;
 // for base 2
 unsigned long long twopow[MAX_ZOOM];
 
+static int orgMinZoom = 0;
+static int orgMaxZoom = 18;
 static int minZoom = 0;
 static int maxZoom = 18;
 static int verbose = 0;
@@ -96,6 +98,7 @@ int main(int argc, char **argv)
 	const char *mapname = mapname_default;
 	const char *tile_dir = tile_dir_default;
 	int x, y, z;
+    time_t m;
 	struct timeval start, end;
 	int num_render = 0, num_all = 0, num_read = 0, num_ignore = 0, num_unlink = 0, num_touch = 0;
 	int c;
@@ -186,7 +189,7 @@ int main(int argc, char **argv)
 				break;
 
 			case 'z':   /* -z, --min-zoom */
-				minZoom = atoi(optarg);
+                orgMinZoom=minZoom=atoi(optarg);
 
 				if (minZoom < 0 || minZoom > MAX_ZOOM) {
 					fprintf(stderr, "Invalid minimum zoom selected, must be between 0 and %d\n", MAX_ZOOM);
@@ -196,7 +199,7 @@ int main(int argc, char **argv)
 				break;
 
 			case 'Z':   /* -Z, --max-zoom */
-				maxZoom = atoi(optarg);
+                orgMaxZoom=maxZoom=atoi(optarg);
 
 				if (maxZoom < 0 || maxZoom > MAX_ZOOM) {
 					fprintf(stderr, "Invalid maximum zoom selected, must be between 0 and %d\n", MAX_ZOOM);
@@ -245,7 +248,7 @@ int main(int argc, char **argv)
 	}
 
 	if (minZoom < excess_zoomlevels) {
-		minZoom = excess_zoomlevels;
+		orgMinZoom = minZoom = excess_zoomlevels;
 	}
 
 	// initialise arrays for tile markings
@@ -286,12 +289,18 @@ int main(int argc, char **argv)
 
 	while (!feof(stdin)) {
 		struct stat_info s;
-		int n = fscanf(stdin, "%d/%d/%d", &z, &x, &y);
+        int n = fscanf(stdin, "%d/%d/%d %ld", &z, &x, &y, &m);
 
 		if (verbose) {
 			printf("read: x=%d y=%d z=%d\n", x, y, z);
 		}
 
+		if (n == 4) {	// Modified needs to eat the human date field
+			char tmp[1024];
+			char *r = fgets(tmp, sizeof(tmp), stdin);
+			if (z < orgMinZoom || z > orgMaxZoom) continue;
+			minZoom = maxZoom = z;	// Only do the specified zoom level!
+		} else 
 		if (n != 3) {
 			// Discard input line
 			char tmp[1024];
@@ -317,7 +326,8 @@ int main(int argc, char **argv)
 			z++;
 		}
 
-		//printf("loop: x=%d y=%d z=%d up to z=%d\n", x, y, z, minZoom);
+        if (verbose)
+	    printf("loop: x=%d y=%d z=%d up to z=%d-%d\n", x, y, z, minZoom, maxZoom);
 		num_read++;
 
 		if (num_read % 100 == 0) {
@@ -326,7 +336,7 @@ int main(int argc, char **argv)
 
 		for (; z >= minZoom; z--, x >>= 1, y >>= 1) {
 			if (verbose) {
-				printf("process: x=%d y=%d z=%d\n", x, y, z);
+                printf("process: x=%d y=%d z=%d (%d-%d)\n", x, y, z, minZoom, maxZoom);
 			}
 
 			// don't do anything if this tile was already requested.
@@ -354,6 +364,11 @@ int main(int argc, char **argv)
 			s = store->tile_stat(store, mapname, "", x, y, z);
 
 			if (s.size > 0) { // Tile exists
+                if (n == 4 && s.mtime >= m) {
+                    if (verbose)
+                        printf("%s %ld newer than %ld", store->tile_storage_id(store, mapname, "", x, y, z, name), s.mtime, m);
+					continue;
+				}
 				// tile exists on disk; render it
 				if (deleteFrom != -1 && z >= deleteFrom) {
 					if (verbose) {
