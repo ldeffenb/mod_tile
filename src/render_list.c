@@ -72,6 +72,37 @@ void display_rate(struct timeval start, struct timeval end, int num)
 	fflush(NULL);
 }
 
+int check_and_queue(int x, int y, int z, int force, int onlyexisting, const char *mapname, struct storage_backend *store)
+{
+    if (force && !onlyexisting) {
+        enqueue(mapname, x, y, z);
+        return 1;
+    } else
+    {   struct stat_info s = store->tile_stat(store, mapname, "", x, y, z);
+        if (!onlyexisting || s.size >= 0) {
+            if (force || s.expired || (s.size < 0)) {
+                enqueue(mapname, x, y, z);
+		return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+int recurse_and_queue(int x, int y, int z, int max_zoom, int force, int onlyexisting, const char *mapname, struct storage_backend *store)
+{
+    int did = 0;
+    if (z < max_zoom)
+    {	int x2 = x*2, y2 = y*2, z1 = z+1;
+        did += recurse_and_queue(x2,y2,z1,max_zoom,force,onlyexisting,mapname,store);
+	did += recurse_and_queue(x2+METATILE,y2,z1,max_zoom,force,onlyexisting,mapname,store);
+	did += recurse_and_queue(x2+METATILE,y2+METATILE,z1,max_zoom,force,onlyexisting,mapname,store);
+	did += recurse_and_queue(x2,y2+METATILE,z1,max_zoom,force,onlyexisting,mapname,store);
+    }
+    did += check_and_queue(x,y,z,force,onlyexisting,mapname,store);
+    return did;
+}
+
 int main(int argc, char **argv)
 {
 	char *spath = strdup(RENDER_SOCKET);
@@ -87,6 +118,8 @@ int main(int argc, char **argv)
 	int all = 0;
 	int numThreads = 1;
 	int force = 0;
+    int onlyexisting=0;
+    int recurse=0;
 	struct storage_backend * store;
 	struct stat_info s;
 
@@ -106,12 +139,14 @@ int main(int argc, char **argv)
 			{"map", 1, 0, 'm'},
 			{"verbose", 0, 0, 'v'},
 			{"force", 0, 0, 'f'},
+            {"exists", 0, 0, 'e'},
+            {"recurse", 0, 0, 'r'},
 			{"all", 0, 0, 'a'},
 			{"help", 0, 0, 'h'},
 			{0, 0, 0, 0}
 		};
 
-		c = getopt_long(argc, argv, "hvaz:Z:x:X:y:Y:s:m:t:n:l:f", long_options, &option_index);
+        c = getopt_long(argc, argv, "hvaz:Z:x:X:y:Y:s:m:t:n:l:efr", long_options, &option_index);
 
 		if (c == -1) {
 			break;
@@ -184,11 +219,15 @@ int main(int argc, char **argv)
 				}
 
 				break;
-
-			case 'f':   /* -f, --force */
-				force = 1;
+            case 'e':   /* -e, --exists */
+                onlyexisting=1;
+                break;
+            case 'f':   /* -f, --force */
+                force=1;
+                break;
+            case 'r':	/* -r, --recurse */
+				recurse=1;
 				break;
-
 			case 'v':   /* -v, --verbose */
 				verbose = 1;
 				break;
@@ -196,7 +235,9 @@ int main(int argc, char **argv)
 			case 'h':   /* -h, --help */
 				fprintf(stderr, "Usage: render_list [OPTION] ...\n");
 				fprintf(stderr, "  -a, --all            render all tiles in given zoom level range instead of reading from STDIN\n");
-				fprintf(stderr, "  -f, --force          render tiles even if they seem current\n");
+                fprintf(stderr, "  -e, --exists         re-render tiles only if already present\n");
+                fprintf(stderr, "  -f, --force          render tiles even if they seem current\n");
+                fprintf(stderr, "  -r, --recurse        recurse from min to max zoom at each tile\n");
 				fprintf(stderr, "  -m, --map=MAP        render tiles in this map (defaults to '" XMLCONFIG_DEFAULT "')\n");
 				fprintf(stderr, "  -l, --max-load=LOAD  sleep if load is this high (defaults to %d)\n", MAX_LOAD_OLD);
 				fprintf(stderr, "  -s, --socket=SOCKET  unix domain socket name for contacting renderd\n");
@@ -238,7 +279,7 @@ int main(int argc, char **argv)
 	}
 
 	if (all) {
-		if ((minX != -1 || minY != -1 || maxX != -1 || maxY != -1) && minZoom != maxZoom) {
+        if ((minX != -1 || minY != -1 || maxX != -1 || maxY != -1) && minZoom != maxZoom && !recurse) {
 			fprintf(stderr, "min-zoom must be equal to max-zoom when using min-x, max-x, min-y, or max-y options\n");
 			return 1;
 		}
@@ -253,7 +294,7 @@ int main(int argc, char **argv)
 
 		int lz = (1 << minZoom) - 1;
 
-		if (minZoom == maxZoom) {
+        if (minZoom == maxZoom || recurse) {
 			if (maxX == -1) {
 				maxX = lz;
 			}
@@ -285,24 +326,42 @@ int main(int argc, char **argv)
 		int x, y, z;
 		printf("Rendering all tiles from zoom %d to zoom %d\n", minZoom, maxZoom);
 
-		for (z = minZoom; z <= maxZoom; z++) {
-			int current_maxX = (maxX == -1) ? (1 << z) - 1 : maxX;
-			int current_maxY = (maxY == -1) ? (1 << z) - 1 : maxY;
-			printf("Rendering all tiles for zoom %d from (%d, %d) to (%d, %d)\n", z, minX, minY, current_maxX, current_maxY);
-
-			for (x = minX; x <= current_maxX; x += METATILE) {
-				for (y = minY; y <= current_maxY; y += METATILE) {
-					if (!force) {
-						s = store->tile_stat(store, mapname, "", x, y, z);
+        if (recurse)
+		{
+			time_t nextTime = 0;
+			int current_maxX = (maxX == -1) ? (1 << minZoom)-1 : maxX;
+			int current_maxY = (maxY == -1) ? (1 << minZoom)-1 : maxY;
+			for (x=minX; x <= current_maxX; x+=METATILE) {
+				for (y=minY; y <= current_maxY; y+=METATILE) {
+					if (time(NULL) >= nextTime) {
+						nextTime = time(NULL) + 1;
+						printf("Checking (%d, %d) zoom %d to %d\r", x, y, minZoom, maxZoom);
+						fflush(stdout);
 					}
+					num_render += recurse_and_queue(x,y,minZoom,maxZoom,force,onlyexisting,mapname,store);
+				}
+			}
+		} else
+		{
+			for (z = minZoom; z <= maxZoom; z++) {
+				int current_maxX = (maxX == -1) ? (1 << z) - 1 : maxX;
+				int current_maxY = (maxY == -1) ? (1 << z) - 1 : maxY;
+				printf("Rendering all tiles for zoom %d from (%d, %d) to (%d, %d)\n", z, minX, minY, current_maxX, current_maxY);
 
-					if (force || (s.size < 0) || (s.expired)) {
-						enqueue(mapname, x, y, z);
-						num_render++;
+				for (x = minX; x <= current_maxX; x += METATILE) {
+					for (y = minY; y <= current_maxY; y += METATILE) {
+						if (!force) {
+							s = store->tile_stat(store, mapname, "", x, y, z);
+						}
+
+						if (force || (s.size < 0) || (s.expired)) {
+							enqueue(mapname, x, y, z);
+							num_render++;
+						}
+
+						num_all++;
+
 					}
-
-					num_all++;
-
 				}
 			}
 		}
@@ -337,14 +396,7 @@ int main(int argc, char **argv)
 
 			num_all++;
 
-			if (!force) {
-				s = store->tile_stat(store, mapname, "", x, y, z);
-			}
-
-			if (force || (s.size < 0) || (s.expired)) {
-				// missing or old, render it
-				//ret = process_loop(fd, mapname, x, y, z);
-				enqueue(mapname, x, y, z);
+            if (check_and_queue(x,y,z,force,onlyexisting,mapname,store)) {
 				num_render++;
 
 				// Attempts to adjust the stats for the QMAX tiles which are likely in the queue
